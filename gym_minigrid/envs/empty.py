@@ -11,15 +11,19 @@ class EmptyEnv(MiniGridEnv):
         size=8,
         agent_start_pos=(1,1),
         agent_start_dir=0,
+        goal_loc="bottom_right",
+        symmetric=False
     ):
         self.agent_start_pos = agent_start_pos
         self.agent_start_dir = agent_start_dir
+        self.goal_loc = goal_loc
 
         super().__init__(
             grid_size=size,
             max_steps=4*size*size,
             # Set this to True for maximum speed
-            see_through_walls=True
+            see_through_walls=True,
+            symmetric=symmetric
         )
 
     def _gen_grid(self, width, height):
@@ -29,8 +33,12 @@ class EmptyEnv(MiniGridEnv):
         # Generate the surrounding walls
         self.grid.wall_rect(0, 0, width, height)
 
-        # Place a goal square in the bottom-right corner
-        self.put_obj(Goal(), width - 2, height - 2)
+        # Place a goal square in the appropriate location
+        if self.goal_loc == "bottom_right":
+            self.put_obj(Goal(), width - 2, height - 2)
+        elif self.goal_loc == "bottom_left":
+            self.put_obj(Goal(), 1, height - 2)
+
 
         # Place the agent
         if self.agent_start_pos is not None:
@@ -61,6 +69,11 @@ class EmptyEnv16x16(EmptyEnv):
     def __init__(self, **kwargs):
         super().__init__(size=16, **kwargs)
 
+class EmptyEnv100x100(EmptyEnv):
+    def __init__(self, **kwargs):
+        super().__init__(size=100, **kwargs)
+
+
 register(
     id='MiniGrid-Empty-5x5-v0',
     entry_point='gym_minigrid.envs:EmptyEnv5x5'
@@ -89,4 +102,21 @@ register(
 register(
     id='MiniGrid-Empty-16x16-v0',
     entry_point='gym_minigrid.envs:EmptyEnv16x16'
+)
+
+register(
+    id='MiniGrid-Empty-16x16BottomLeft-v0',
+    entry_point='gym_minigrid.envs:EmptyEnv16x16',
+    kwargs={"goal_loc": "bottom_left"}
+)
+
+register(
+    id='MiniGrid-Empty-100x100-v0',
+    entry_point='gym_minigrid.envs:EmptyEnv100x100'
+)
+
+register(
+    id='MiniGrid-Empty-16x16Sym-v0',
+    entry_point='gym_minigrid.envs:EmptyEnv16x16',
+    kwargs={"symmetric": True}
 )

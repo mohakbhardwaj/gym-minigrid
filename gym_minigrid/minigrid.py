@@ -441,7 +441,8 @@ class Grid:
         agent_dir=None,
         highlight=False,
         tile_size=TILE_PIXELS,
-        subdivs=3
+        subdivs=3,
+        symmetric_agent=False
     ):
         """
         Render a tile and cache the result
@@ -465,15 +466,19 @@ class Grid:
 
         # Overlay the agent on top
         if agent_dir is not None:
-            tri_fn = point_in_triangle(
-                (0.12, 0.19),
-                (0.87, 0.50),
-                (0.12, 0.81),
-            )
+            if symmetric_agent:
+                fill_coords(img, point_in_circle(0.5, 0.5, 0.5), (255, 0, 0))
+            else:
+                tri_fn = point_in_triangle(
+                    (0.12, 0.19),
+                    (0.87, 0.50),
+                    (0.12, 0.81),
+                )
 
-            # Rotate the agent based on its direction
-            tri_fn = rotate_fn(tri_fn, cx=0.5, cy=0.5, theta=0.5*math.pi*agent_dir)
-            fill_coords(img, tri_fn, (255, 0, 0))
+                # Rotate the agent based on its direction
+                tri_fn = rotate_fn(tri_fn, cx=0.5, cy=0.5, theta=0.5*math.pi*agent_dir)
+                fill_coords(img, tri_fn, (255, 0, 0))
+
 
         # Highlight the cell if needed
         if highlight:
@@ -492,7 +497,8 @@ class Grid:
         tile_size,
         agent_pos=None,
         agent_dir=None,
-        highlight_mask=None
+        highlight_mask=None,
+        symmetric_agent=False,
     ):
         """
         Render this grid at a given scale
@@ -519,7 +525,8 @@ class Grid:
                     cell,
                     agent_dir=agent_dir if agent_here else None,
                     highlight=highlight_mask[i, j],
-                    tile_size=tile_size
+                    tile_size=tile_size,
+                    symmetric_agent=symmetric_agent
                 )
 
                 ymin = j * tile_size
@@ -641,6 +648,27 @@ class MiniGridEnv(gym.Env):
 
         # Done completing task
         done = 6
+    
+    class ActionsSym(IntEnum):
+        # Turn left, turn right, move forward or back
+        # left = 0
+        # right = 1
+        # up = 2
+        # down = 3
+        right = 0
+        down = 1
+        left = 2
+        up = 3
+
+        # # Pick up an object
+        # pickup = 3
+        # # Drop an object
+        # drop = 4
+        # # Toggle/activate an object
+        # toggle = 5
+
+        # # Done completing task
+        # done = 6        
 
     def __init__(
         self,
@@ -650,17 +678,21 @@ class MiniGridEnv(gym.Env):
         max_steps=100,
         see_through_walls=False,
         seed=1337,
-        agent_view_size=7
+        agent_view_size=7,
+        symmetric=False,
     ):
         # Can't set both grid_size and width/height
         if grid_size:
             assert width == None and height == None
             width = grid_size
             height = grid_size
+        self.symmetric = symmetric
 
         # Action enumeration for this environment
-        self.actions = MiniGridEnv.Actions
-
+        self.actions = MiniGridEnv.ActionsSym if self.symmetric else MinigridEnv.SymActions
+        # if not self.symmetric:
+            # self.actions = MiniGridEnv.Actions
+        
         # Actions are discrete integer values
         self.action_space = spaces.Discrete(len(self.actions))
 
@@ -775,12 +807,20 @@ class MiniGridEnv(gym.Env):
         OPENDED_DOOR_IDS = '_'
 
         # Map agent's direction to short string
-        AGENT_DIR_TO_STR = {
-            0: '>',
-            1: 'V',
-            2: '<',
-            3: '^'
-        }
+        if not self.symmetric:
+            AGENT_DIR_TO_STR = {
+                0: '>',
+                1: 'V',
+                2: '<',
+                3: '^'
+            }
+        else:
+            AGENT_DIR_TO_STR = {
+                0: 'o',
+                1: 'o',
+                2: 'o',
+                3: 'o'
+            }
 
         str = ''
 
@@ -971,7 +1011,9 @@ class MiniGridEnv(gym.Env):
         pos = self.place_obj(None, top, size, max_tries=max_tries)
         self.agent_pos = pos
 
-        if rand_dir:
+        if self.symmetric:
+            self.agent_dir = -1
+        elif rand_dir:
             self.agent_dir = self._rand_int(0, 4)
 
         return pos
@@ -994,6 +1036,22 @@ class MiniGridEnv(gym.Env):
 
         dx, dy = self.dir_vec
         return np.array((-dy, dx))
+
+    @property
+    def left_vec(self):
+        """
+        Get the vector pointing to the right of the agent.
+        """
+        dx, dy = self.dir_vec
+        return np.array((dy, -dx))
+
+    @property
+    def back_vec(self):
+        """
+        Get the vector pointing to the right of the agent.
+        """
+        dx, dy = self.dir_vec
+        return np.array((-dx, -dy))
 
     @property
     def front_pos(self):
@@ -1101,59 +1159,71 @@ class MiniGridEnv(gym.Env):
 
         reward = 0
         done = False
-
-        # Get the position in front of the agent
-        fwd_pos = self.front_pos
-
-        # Get the contents of the cell in front of the agent
-        fwd_cell = self.grid.get(*fwd_pos)
-
-        # Rotate left
-        if action == self.actions.left:
-            self.agent_dir -= 1
-            if self.agent_dir < 0:
-                self.agent_dir += 4
-
-        # Rotate right
-        elif action == self.actions.right:
-            self.agent_dir = (self.agent_dir + 1) % 4
-
-        # Move forward
-        elif action == self.actions.forward:
-            if fwd_cell == None or fwd_cell.can_overlap():
-                self.agent_pos = fwd_pos
-            if fwd_cell != None and fwd_cell.type == 'goal':
+        if self.symmetric:
+            dir_vec = DIR_TO_VEC[action]
+            new_pos = self.agent_pos + dir_vec
+            new_cell = self.grid.get(*new_pos)
+            if new_cell == None or new_cell.can_overlap():
+                self.agent_pos = new_pos
+            if new_cell != None and new_cell.type == 'goal':
                 done = True
                 reward = self._reward()
-            if fwd_cell != None and fwd_cell.type == 'lava':
-                done = True
-
-        # Pick up an object
-        elif action == self.actions.pickup:
-            if fwd_cell and fwd_cell.can_pickup():
-                if self.carrying is None:
-                    self.carrying = fwd_cell
-                    self.carrying.cur_pos = np.array([-1, -1])
-                    self.grid.set(*fwd_pos, None)
-
-        # Drop an object
-        elif action == self.actions.drop:
-            if not fwd_cell and self.carrying:
-                self.grid.set(*fwd_pos, self.carrying)
-                self.carrying.cur_pos = fwd_pos
-                self.carrying = None
-
-        # Toggle/activate an object
-        elif action == self.actions.toggle:
-            if fwd_cell:
-                fwd_cell.toggle(self, fwd_pos)
-
-        # Done action (not used by default)
-        elif action == self.actions.done:
-            pass
-
+            if new_cell != None and new_cell.type == 'lava':
+                done = True    
+            # self.agent_dir = -1         
         else:
-            assert False, "unknown action"
+            # Get the position in front of the agent
+            fwd_pos = self.front_pos
+
+            # Get the contents of the cell in front of the agent
+            fwd_cell = self.grid.get(*fwd_pos)
+
+            # Rotate left
+            if action == self.actions.left:
+                self.agent_dir -= 1
+                if self.agent_dir < 0:
+                    self.agent_dir += 4
+                    
+            # Rotate right
+            elif action == self.actions.right:
+                self.agent_dir = (self.agent_dir + 1) % 4
+
+            # Move forward
+            elif action == self.actions.forward:
+                if fwd_cell == None or fwd_cell.can_overlap():
+                    self.agent_pos = fwd_pos
+                if fwd_cell != None and fwd_cell.type == 'goal':
+                    done = True
+                    reward = self._reward()
+                if fwd_cell != None and fwd_cell.type == 'lava':
+                    done = True
+
+            # Pick up an object
+            elif action == self.actions.pickup:
+                if fwd_cell and fwd_cell.can_pickup():
+                    if self.carrying is None:
+                        self.carrying = fwd_cell
+                        self.carrying.cur_pos = np.array([-1, -1])
+                        self.grid.set(*fwd_pos, None)
+
+            # Drop an object
+            elif action == self.actions.drop:
+                if not fwd_cell and self.carrying:
+                    self.grid.set(*fwd_pos, self.carrying)
+                    self.carrying.cur_pos = fwd_pos
+                    self.carrying = None
+
+            # Toggle/activate an object
+            elif action == self.actions.toggle:
+                if fwd_cell:
+                    fwd_cell.toggle(self, fwd_pos)
+
+            # Done action (not used by default)
+            elif action == self.actions.done:
+                pass
+
+            else:
+                assert False, "unknown action"
 
         if self.step_count >= self.max_steps:
             done = True
@@ -1230,7 +1300,8 @@ class MiniGridEnv(gym.Env):
             tile_size,
             agent_pos=(self.agent_view_size // 2, self.agent_view_size - 1),
             agent_dir=3,
-            highlight_mask=vis_mask
+            highlight_mask=vis_mask,
+            symmetric_agent=self.symmetric
         )
 
         return img
@@ -1285,7 +1356,8 @@ class MiniGridEnv(gym.Env):
             tile_size,
             self.agent_pos,
             self.agent_dir,
-            highlight_mask=highlight_mask if highlight else None
+            highlight_mask=highlight_mask if highlight else None,
+            symmetric_agent=self.symmetric
         )
 
         if mode == 'human':
@@ -1298,3 +1370,5 @@ class MiniGridEnv(gym.Env):
         if self.window:
             self.window.close()
         return
+
+
